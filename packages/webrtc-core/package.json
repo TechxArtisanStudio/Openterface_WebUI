@@ -10,7 +10,7 @@
     "typecheck": "vue-tsc --noEmit --skipLibCheck"
   },
   "dependencies": {
-    "@openterface/core": "*"
+    "@openterface/core": "git+https://github.com/TechxArtisanStudio/Openterface_Web.git#main:packages/core"
   },
   "peerDependencies": {
     "vue": "^3.5.13"
