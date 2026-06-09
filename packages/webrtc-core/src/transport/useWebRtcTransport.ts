@@ -210,10 +210,25 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
   /**
    * Write data to DataChannel.
    * Translates CH9329 binary frames to JSON for Android compatibility.
+   *
+   * Handles both single 14-byte frames and dual 28-byte press+release frames
+   * from WASM keymod's buildPressRelease().
    */
   async function write(data: Uint8Array): Promise<void> {
     if (dc.value?.readyState !== 'open') {
       console.warn('[WebRTC] Cannot write: DataChannel not open')
+      return
+    }
+
+    // Handle WASM buildPressRelease 28-byte dual frame
+    // This is two concatenated 14-byte CH9329 keyboard frames:
+    // [0..13]  = press frame (modifier + hidCode)
+    // [14..27] = release frame (all zeros)
+    if (data.length === 28 && data[0] === 0x57 && data[1] === 0xab && data[3] === 0x02) {
+      // Process press frame
+      sendKeyboardFrame(data.subarray(0, 14))
+      // Process release frame
+      sendKeyboardFrame(data.subarray(14, 28))
       return
     }
 
@@ -222,18 +237,16 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
       const command = data[3]
 
       if (command === 0x02) { // Keyboard command
-        const modifier = data[4]
-        const hidCode = data[5]
-        const keysym = hidToVncKeysym(hidCode, modifier)
-        const msg = JSON.stringify({ type: 'keyboard', keysym, down: true })
-        dc.value.send(new TextEncoder().encode(msg))
+        sendKeyboardFrame(data)
         return
       }
 
-      if (command === 0x05) { // Mouse absolute command
-        const buttons = data[4]
-        const x = (data[5] << 8) | data[6]
-        const y = (data[7] << 8) | data[8]
+      if (command === 0x04) { // Mouse absolute command
+        // Core CH9329 absolute mouse packet format:
+        // 57 AB 00 04 07 | mode | buttons | x_lo | x_hi | y_lo | y_hi | wheel | checksum
+        const buttons = data[6]
+        const x = data[7] | (data[8] << 8)
+        const y = data[9] | (data[10] << 8)
         const msg = JSON.stringify({
           type: 'mouse',
           buttonMask: buttons,
@@ -244,17 +257,16 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
         return
       }
 
-      if (command === 0x04) { // Mouse relative command
-        // Android doesn't support relative mouse, send absolute with current position
-        const buttons = data[4]
-        const dx = data[5]
-        const dy = data[6]
-        const wheel = data[7]
-        // For now, just send as-is - Android may handle or ignore
+      if (command === 0x05) { // Mouse relative command
+        // Core CH9329 relative mouse packet format:
+        // 57 AB 00 05 05 | mode | buttons | deltaX | deltaY | wheel | checksum
+        const buttons = data[6]
+        const dx = data[7]
+        const dy = data[8]
         const msg = JSON.stringify({
           type: 'mouse',
           buttonMask: buttons,
-          x: dx,  // Approximate
+          x: dx,
           y: dy,
           pressed: buttons !== 0
         })
@@ -265,6 +277,27 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
 
     // Fallback: send raw binary
     dc.value.send(data)
+  }
+
+  /**
+   * Send a single 14-byte CH9329 keyboard frame as JSON.
+   */
+  function sendKeyboardFrame(frame: Uint8Array): void {
+    // Core CH9329 keyboard packet format:
+    // 57 AB 00 02 08 | modifier | reserved | key1..key6 | checksum
+    const modifier = frame[5]
+    const hidCode = frame[7]
+
+    // Empty key list means release all keys
+    if (!hidCode && modifier === 0) {
+      const msg = JSON.stringify({ type: 'keyboard', keysym: 0, down: false })
+      dc.value.send(new TextEncoder().encode(msg))
+      return
+    }
+
+    const keysym = hidToVncKeysym(hidCode, modifier)
+    const msg = JSON.stringify({ type: 'keyboard', keysym, down: true })
+    dc.value.send(new TextEncoder().encode(msg))
   }
 
   async function queryDeviceInfo(): Promise<void> {
