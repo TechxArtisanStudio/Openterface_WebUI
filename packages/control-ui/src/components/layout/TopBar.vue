@@ -32,24 +32,26 @@ const stateLabel = computed(() => {
 <template>
   <div class="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border-b border-slate-800 h-10 shrink-0">
     <!-- Logo -->
-    <div class="flex items-center gap-2 shrink-0">
-      <span class="text-sm font-semibold text-orange-400">Openterface</span>
-      <span class="text-xs text-slate-500">Web Viewer</span>
+    <div class="flex items-center gap-1.5 shrink-0">
+      <span class="text-xs font-semibold text-orange-400">Openterface</span>
+      <span class="text-[10px] text-slate-500">Web Viewer</span>
     </div>
 
-    <div class="h-5 w-px bg-slate-700 mx-1 shrink-0" />
+    <template v-if="showCameraSelector !== false">
+      <div class="h-5 w-px bg-slate-700 mx-1 shrink-0" />
 
-    <!-- Camera Selector - only shown for USB mode -->
-    <CameraSelector v-if="showCameraSelector !== false" />
+      <!-- Camera Selector - only shown for USB mode -->
+      <CameraSelector />
 
-    <div class="h-5 w-px bg-slate-700 mx-1 shrink-0" />
+      <div class="h-5 w-px bg-slate-700 mx-1 shrink-0" />
+    </template>
 
     <!-- Connection Status -->
     <div
       class="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium"
       :class="transport.isConnected.value ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'"
     >
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg class="w-2 h-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
       </svg>
       {{ stateLabel }}

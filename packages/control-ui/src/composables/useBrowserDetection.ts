@@ -11,7 +11,7 @@ export function useBrowserDetection() {
   }
 
   const serial = 'serial' in navigator
-  const mediaDevices = 'mediaDevices' in navigator
+  const mediaDevices = !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === 'function')
   const pointerLock = 'pointerLockElement' in document
   const clipboard = 'clipboard' in navigator
   const imageCapture = 'ImageCapture' in window

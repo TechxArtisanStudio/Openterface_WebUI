@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, inject, onMounted, onUnmounted, type Ref, watch } from 'vue'
+import { ref, inject, onMounted, onUnmounted, type Ref, watch, computed } from 'vue'
 import { HIDTransportKey } from '@openterface/core'
 
 const videoRef = ref<HTMLVideoElement | null>(null)
@@ -26,12 +26,26 @@ const props = defineProps<{
 
 defineExpose({ videoRef })
 
-// Watch for remote stream (WebRTC mode)
-watch(() => props.remoteStream, (stream) => {
-  if (videoRef.value && stream) {
-    videoRef.value.srcObject = stream
-    videoRef.value.play().catch(e => console.error('[VideoStream] Remote video play error:', e))
-  }
+// Set the video source when remoteStream is available.
+// This watches the prop for backward compatibility, but also checks directly
+// on mount for cases where the stream is already present before the watch fires.
+function attachStream(stream: MediaStream | null | undefined) {
+  console.log('[VideoStream] attachStream called, videoRef:', !!videoRef.value, 'stream:', stream ? 'MediaStream' : 'null/undefined')
+  if (!videoRef.value || !stream) return
+  videoRef.value.srcObject = stream
+  console.log('[VideoStream] srcObject set, calling play()')
+  videoRef.value.play().catch(e => console.error('[VideoStream] Remote video play error:', e))
+}
+
+// Directly watch transport's remoteStream instead of relying on props
+const remoteStream = computed(() => transport.remoteStream?.value)
+
+console.log('[VideoStream] transport.remoteStream type:', typeof transport.remoteStream, 'isRef:', transport.remoteStream?.constructor?.name)
+
+// Watch transport's remoteStream directly
+watch(remoteStream, (stream) => {
+  console.log('[VideoStream] remoteStream watch fired:', stream ? 'MediaStream received' : 'null/undefined', stream)
+  attachStream(stream)
 })
 
 onMounted(() => {
@@ -39,10 +53,7 @@ onMounted(() => {
     videoElRef.value = videoRef.value
   }
   // Handle remote stream already available on mount
-  if (props.remoteStream && videoRef.value) {
-    videoRef.value.srcObject = props.remoteStream
-    videoRef.value.play().catch(e => console.error('[VideoStream] Remote video play error:', e))
-  }
+  attachStream(remoteStream.value)
 })
 
 onUnmounted(() => {
@@ -72,7 +83,7 @@ function toggleFullscreen(): void {
     @wheel="$emit('wheel', $event)"
   >
     <!-- Video Element -->
-    <video
+    <video crossorigin="anonymous" webkit-playsinline
       ref="videoRef"
       class="w-full h-full object-contain"
       autoplay
@@ -81,13 +92,13 @@ function toggleFullscreen(): void {
     />
 
     <!-- Welcome Poster (shown when not connected) -->
-    <div v-if="!isConnected.value" class="absolute inset-0 flex items-center justify-center bg-slate-950 pointer-events-none">
+    <div v-if="!isConnected" class="absolute inset-0 flex items-center justify-center bg-slate-950 pointer-events-none">
       <div class="text-center">
-        <svg class="w-20 h-20 mx-auto text-slate-700 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-12 h-12 mx-auto text-slate-700 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
         </svg>
-        <p class="text-slate-500 text-sm">No video signal</p>
-        <p class="text-slate-600 text-xs mt-1">Connect to begin</p>
+        <p class="text-slate-500 text-xs">No video signal</p>
+        <p class="text-slate-600 text-[10px] mt-1">Connect to begin</p>
       </div>
     </div>
 

@@ -64,6 +64,17 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
         console.log('[WebRTC] Received remote track:', event.track.kind)
         if (event.track.kind === 'video') {
           remoteStream.value = event.streams[0]
+          // Mark as connected so the welcome poster hides immediately
+          // (DataChannel may open separately but media can flow independently)
+          state.value = TransportState.Connected
+        }
+      }
+
+      // 5. Track ICE connection state
+      pc.value.oniceconnectionstatechange = () => {
+        console.log('[WebRTC] ICE state:', pc.value?.iceConnectionState)
+        if (pc.value?.iceConnectionState === 'failed') {
+          state.value = TransportState.Error
         }
       }
 
@@ -71,13 +82,17 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
       const iceCandidates: RTCIceCandidateInit[] = []
       pc.value.onicecandidate = (event) => {
         if (event.candidate) {
-          iceCandidates.push(event.candidate.toJSON())
+          const candJson = event.candidate.toJSON()
+          console.log('[WebRTC] Local ICE candidate:', JSON.stringify(candJson))
+          iceCandidates.push(candJson)
           // Send to server
           fetch('/ice', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(event.candidate.toJSON()),
-          }).catch(err => console.error('[WebRTC] ICE send error:', err))
+            body: JSON.stringify(candJson),
+          })
+            .then(() => console.log('[WebRTC] Local ICE sent to server'))
+            .catch(err => console.error('[WebRTC] ICE send error:', err))
         }
       }
 
@@ -97,15 +112,19 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
         throw new Error(`Offer failed: ${response.status}`)
       }
 
-      // 8. Poll for answer
+      // 8. Poll for answer (returns both SDP and initial ICE candidates)
       console.log('[WebRTC] Waiting for answer...')
-      const answer = await pollForAnswer()
+      const { sdp: answerSdp, initialCandidates } = await pollForAnswer()
 
-      // 9. Set remote description
+      // 9. Set remote description FIRST
+      const answer = { type: 'answer' as RTCSdpType, sdp: answerSdp }
       await pc.value.setRemoteDescription(answer)
       console.log('[WebRTC] Set remote description')
 
-      // 10. Start polling for ICE candidates
+      // 10. Process initial ICE candidates from server (only NOW that remote description is set)
+      processIceCandidates(initialCandidates)
+
+      // 11. Start polling for additional ICE candidates
       startIceCandidatePolling()
 
       return true
@@ -118,7 +137,7 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
 
   let icePollInterval: ReturnType<typeof setInterval> | null = null
 
-  async function pollForAnswer(): Promise<RTCSessionDescriptionInit> {
+  async function pollForAnswer(): Promise<{ sdp: string, initialCandidates: any[] }> {
     const maxAttempts = 60 // 60 seconds timeout
     for (let i = 0; i < maxAttempts; i++) {
       try {
@@ -127,9 +146,7 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
           const data = await response.json()
           if (data.type === 'answer' && data.sdp) {
             console.log('[WebRTC] Got answer from server')
-            // Process any ICE candidates from Android (initial batch)
-            processIceCandidates(data.candidates)
-            return { type: data.type, sdp: data.sdp }
+            return { sdp: data.sdp, initialCandidates: data.candidates || [] }
           }
         }
       } catch (err) {

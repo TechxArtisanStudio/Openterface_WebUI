@@ -21,7 +21,7 @@ const filteredDevices = computed(() =>
 
 export function useViewerMedia() {
   async function refreshDevices(): Promise<MediaDeviceInfo[]> {
-    if (!('mediaDevices' in navigator)) return []
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return []
     try {
       const all = await navigator.mediaDevices.enumerateDevices()
       console.log('[ViewerMedia] enumerateDevices:', all.map(d => ({ kind: d.kind, deviceId: d.deviceId.slice(0,8), label: d.label })))
@@ -40,8 +40,8 @@ export function useViewerMedia() {
       console.log('[ViewerMedia] already connected, skipping')
       return true
     }
-    if (!('mediaDevices' in navigator)) {
-      console.error('[ViewerMedia] mediaDevices not available')
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      console.error('[ViewerMedia] getUserMedia not available (requires HTTPS or localhost)')
       return false
     }
     console.log('[ViewerMedia] connect called, videoEl:', !!videoEl, 'requestedDeviceId:', deviceId)
