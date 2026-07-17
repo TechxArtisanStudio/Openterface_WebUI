@@ -298,6 +298,8 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
 
   /**
    * Send a single 14-byte CH9329 keyboard frame as JSON.
+   * Preserves the raw modifier byte so the Android side can apply
+   * shift/ctrl/alt/win correctly when building the CH9329 HID frame.
    */
   function sendKeyboardFrame(frame: Uint8Array): void {
     // Core CH9329 keyboard packet format:
@@ -305,15 +307,19 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
     const modifier = frame[5]
     const hidCode = frame[7]
 
+    console.log('[WebRTC] sendKeyboardFrame: frame[5]=0x' + modifier.toString(16) + ', frame[7]=0x' + hidCode.toString(16) + ', frameLen=' + frame.length)
+
     // Empty key list means release all keys
     if (!hidCode && modifier === 0) {
-      const msg = JSON.stringify({ type: 'keyboard', keysym: 0, down: false })
+      console.log('[WebRTC] Sending release frame')
+      const msg = JSON.stringify({ type: 'keyboard', keysym: 0, down: false, modifier: 0 })
       dc.value.send(new TextEncoder().encode(msg))
       return
     }
 
     const keysym = hidToVncKeysym(hidCode, modifier)
-    const msg = JSON.stringify({ type: 'keyboard', keysym, down: true })
+    const msg = JSON.stringify({ type: 'keyboard', keysym, down: true, modifier })
+    console.log('[WebRTC] Sending keyboard:', msg)
     dc.value.send(new TextEncoder().encode(msg))
   }
 
@@ -334,26 +340,76 @@ export function useWebRtcTransport(): WebRtcHIDTransport {
 }
 
 /**
- * Convert HID usage code to VNC keysym
- * Basic mapping for a-z, 0-9
- * TODO: Expand full mapping based on Android's VncKeyMap.java
+ * Convert HID usage code to VNC keysym.
+ * Checks the CH9329 modifier byte to return the correct case/symbol.
+ *
+ * Modifier byte layout (bit positions):
+ *   bit 0 (0x01) = Left Ctrl
+ *   bit 1 (0x02) = Left Shift
+ *   bit 2 (0x04) = Left Alt
+ *   bit 3 (0x08) = Left Win
+ *   bit 4 (0x10) = Right Ctrl
+ *   bit 5 (0x20) = Right Shift
+ *   bit 6 (0x40) = Right Alt
+ *   bit 7 (0x80) = Right Win
  */
 function hidToVncKeysym(hidCode: number, modifier: number): number {
-  // Letter keys (a-z): HID 0x04-0x1d
+  console.log('[WebRTC] hidToVncKeysym: hidCode=0x' + hidCode.toString(16) + ', modifier=0x' + modifier.toString(16))
+
+  // Check if any shift is held (Left Shift bit 1 or Right Shift bit 5)
+  const shiftHeld = (modifier & 0x22) !== 0
+  console.log('[WebRTC] shiftHeld=' + shiftHeld)
+
+  // Letter keys (a-z / A-Z): HID 0x04-0x1d
   if (hidCode >= 0x04 && hidCode <= 0x1d) {
-    // a-z (lowercase ASCII)
-    return 0x61 + (hidCode - 0x04)
+    return shiftHeld
+      ? 0x41 + (hidCode - 0x04)  // A-Z (uppercase)
+      : 0x61 + (hidCode - 0x04)  // a-z (lowercase)
   }
 
-  // Number keys: HID 0x1e-0x27
-  if (hidCode >= 0x1e && hidCode <= 0x26) { // 1-9
-    return 0x31 + (hidCode - 0x1e)
-  }
-  if (hidCode === 0x27) { // 0
-    return 0x30
+  // Number row keys: HID 0x1e-0x27
+  // Without shift: 1-9, 0
+  // With shift:      !, @, #, $, %, ^, &, *, (, )
+  const numberShiftMap: Record<number, number> = {
+    0x1e: 0x21, // 1 → !
+    0x1f: 0x40, // 2 → @
+    0x20: 0x23, // 3 → #
+    0x21: 0x24, // 4 → $
+    0x22: 0x25, // 5 → %
+    0x23: 0x5e, // 6 → ^
+    0x24: 0x26, // 7 → &
+    0x25: 0x2a, // 8 → *
+    0x26: 0x28, // 9 → (
+    0x27: 0x29, // 0 → )
   }
 
-  // Common special keys
+  if (hidCode >= 0x1e && hidCode <= 0x27) {
+    if (shiftHeld) return numberShiftMap[hidCode]
+    // No shift: digits
+    if (hidCode <= 0x26) return 0x31 + (hidCode - 0x1e)  // 1-9
+    return 0x30  // 0
+  }
+
+  // Common special keys: HID 0x28-0x38
+  // Shift produces shifted punctuation symbols
+  if (shiftHeld) {
+    const shiftedSpecialKeys: Record<number, number> = {
+      0x2d: 0x005f, // - → _
+      0x2e: 0x002b, // = → +
+      0x2f: 0x007b, // [ → {
+      0x30: 0x007d, // ] → }
+      0x31: 0x007c, // \ → |
+      0x33: 0x003a, // ; → :
+      0x34: 0x0022, // ' → "
+      0x35: 0x007e, // ` → ~
+      0x36: 0x003c, // , → <
+      0x37: 0x003e, // . → >
+      0x38: 0x003f, // / → ?
+    }
+    if (shiftedSpecialKeys[hidCode]) return shiftedSpecialKeys[hidCode]
+  }
+
+  // Non-shifted special keys (same regardless of modifier)
   const specialKeys: Record<number, number> = {
     0x28: 0xff0d, // Return
     0x29: 0xff1b, // Escape
@@ -377,13 +433,13 @@ function hidToVncKeysym(hidCode: number, modifier: number): number {
     return specialKeys[hidCode]
   }
 
-  // Function keys F1-F12
+  // Function keys F1-F12 (modifiers don't change the keysym)
   if (hidCode >= 0x3a && hidCode <= 0x45) {
     // F1 = 0xffbe, F2 = 0xffbf, etc.
     return 0xffbe + (hidCode - 0x3a)
   }
 
-  // Arrow keys
+  // Arrow keys (modifiers don't change the keysym)
   if (hidCode === 0x50) return 0xff52 // Up
   if (hidCode === 0x51) return 0xff54 // Down
   if (hidCode === 0x4f) return 0xff53 // Right
